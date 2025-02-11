@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.json": "json",
+        "stdio.h": "c",
+        "strings.h": "c",
+        "__config": "cpp",
+        "in.h": "c",
+        "stdlib.h": "c",
+        "string.h": "c"
+    }
+}
