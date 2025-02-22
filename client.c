@@ -6,6 +6,10 @@
 # include <netinet/in.h>
 # include <string.h>
 # include <netdb.h>
+#include <arpa/inet.h>
+
+# define BUFFER_SIZE 255
+# define PORT 8080
 
 void error(char* msg){
 
@@ -15,56 +19,58 @@ void error(char* msg){
 }
 
 int main (int argc, char *argv[]){
-    /*
-    argv[0] = filename
-    argv[1] = server ip address
-    argv[2] = port num
-    */
-    if (argc < 3){
-        fprintf(stderr, "Usage: %s [HOSTNAME] [PORT] ", argv[0]);
+
+    if (argc < 2){
+        fprintf(stderr, "Usage: %s [SERVER_IP] ", argv[0]);
         exit(1);
     }
+    
+    int sockfd;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
 
-    int sockfd, status;
-    char buff[255];
-    struct addrinfo hints, *res;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) error("❌ Error opening socket");
 
-    status = getaddrinfo(argv[1], argv[2], &hints, &res);
-    if (status != 0){
-        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));  
-    }
-    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    memset(&server_addr, 0, sizeof(server_addr));
 
-    if (sockfd < 0){
-        error("Socket could not be opened.");
-    }
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
 
-    if((connect(sockfd, res->ai_addr, res->ai_addrlen)) < 0){
-        error("❌Connection failed");
-    }
+    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) <= 0) 
+        error("❌ Invalid address");
 
-    printf("✅Connected to server!\n");
+    if (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) error("❌Connection failed");
+    
+    fd_set read_fds;
+
     while(1){
-        printf("Client: ");
-        memset(buff, 0, 255);
-        fgets(buff,255,stdin);
-        write(sockfd, buff, strlen(buff));
 
-        if (strncmp(buff, "END", 3) == 0){
-            printf("🛑Disconnecting...\n");
-            break;
+        FD_ZERO(&read_fds);
+        FD_SET(sockfd, &read_fds); 
+        FD_SET(STDIN_FILENO, &read_fds);
+
+        if (select(sockfd + 1, &read_fds, NULL, NULL, NULL) < 0) error("❌ Select error");
+
+        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+            if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) break;
+            if (write(sockfd, buffer, strlen(buffer)) < 0) error("Write error.");
+            if (strncmp(buffer, "EXIT", 4) == 0) {
+                printf("🛑 Disconnecting...\n");
+                break;
+            }
         }
-        memset(buff, 0, 255);
-        int n = read(sockfd, buff, 255);
-        printf("Server: %s", buff);
-        if (n <= 0){
-            error("Server disconnected.");
+        if (FD_ISSET(sockfd, &read_fds)) {
+            memset(buffer, 0, BUFFER_SIZE);
+            int bytes_read = read(sockfd, buffer, BUFFER_SIZE);
+            if (bytes_read <= 0) {
+                printf("❌ Server disconnected.\n");
+                break;
+            }
+            printf("%s", buffer);
         }
+       
     }
-    freeaddrinfo(res);
     close(sockfd);
 
     return 0;

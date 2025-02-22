@@ -7,68 +7,138 @@
 # include <string.h>
 # include <netdb.h>
 
-void error(char* msg){
+# define MAX_CLIENTS 15
+# define BUFFER_SIZE 255
+# define PORT 8080
 
+int clients[MAX_CLIENTS];
+fd_set active_fds, read_fds;
+
+void error(char* msg){
     perror(msg);
     exit(1);
-
 }
 
-int main (int argc, char *argv[]){
+char* format_message(int client, const char* message) {
+    size_t size = (client >= 0) 
+    ? snprintf(NULL, 0, "Client %d: %s", client, message) + 1
+    : snprintf(NULL, 0, "Server: %s", message) + 1;
 
-    if (argc < 2){
-        fprintf(stderr, "Usage: %s [PORTNUMBER] ", argv[0]);
+    char* formatted = malloc(size);
+    if (!formatted) {
+        perror("Memory allocation failed");
         exit(1);
     }
 
+    if (client >= 0) {
+        snprintf(formatted, size, "Client %d: %s", client, message);
+    } else {
+        snprintf(formatted, size, "Server: %s", message);
+    }
+    return formatted;
+}
+
+void broadcast_clients(char* message, int index){ // sends a given message to all clients
+    for (int i = 0; i < MAX_CLIENTS; i++){
+        if(clients[i] != -1 && clients[i] != index){
+            char* formatted = format_message(index, message);
+            if (formatted) {
+                if (write(clients[i], formatted, strlen(formatted) + 1) < 0) {
+                    printf("❌ Error sending message to client %d. Removing client.\n", clients[i]);
+                    close(clients[i]);
+                    FD_CLR(clients[i], &active_fds);
+                    clients[i] = -1;
+                    free(formatted);  
+                }
+            }
+        }
+    }
+}
+
+int main(int argc, char *argv[]){
+
     int sockfd, newsockfd;
-    char buff[255];
+    char buffer[BUFFER_SIZE];
 
-    struct addrinfo hints, *res;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
-
-    if (getaddrinfo(NULL, argv[1], &hints, &res) != 0) error("getaddrinfo failed.");
-    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-
+    struct sockaddr_in server_addr;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) error("Socket could not be opened.");
 
-    if (bind(sockfd, res->ai_addr, res->ai_addrlen) < 0) error("Socket could not be bound.");
-    freeaddrinfo(res);
+    memset(&server_addr, 0, sizeof(server_addr));
 
-    listen(sockfd, 4);
-    printf("🔌Server listening on port %d.\n", atoi(argv[1]));
+    server_addr.sin_family = AF_INET;  
+    server_addr.sin_addr.s_addr = INADDR_ANY;  
+    server_addr.sin_port = htons(PORT);
+
+    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) 
+        error("Socket could not be bound");
+
+    listen(sockfd, MAX_CLIENTS);
+    printf("🔌Server listening on port %d.\n", PORT);
+
+    FD_ZERO(&active_fds);
+    FD_SET(sockfd, &active_fds);
+    FD_SET(STDIN_FILENO, &active_fds);
+    
+    int max_fd = sockfd;
+    memset(clients, -1, sizeof(clients));
 
     struct sockaddr_storage cli_addr;
     socklen_t clientlen = sizeof(cli_addr);
 
-    newsockfd = accept(sockfd, (struct sockaddr*) &cli_addr, &clientlen);
-    if (newsockfd < 0) error("❌New socket not accepted.");
-    printf("✅Connected to client.\n");
-
     while(1){
-        memset(buff, 0, 255);
-        int n = read(newsockfd, buff, 255);
-        if (n <= 0) error("❌Client disconnected.");
 
-        printf("Client: %s", buff);
+        read_fds = active_fds;
 
-        if (strncmp("END", buff, 3) == 0){
-            printf("🛑Closing connection.");
-            break;
+        if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) < 0) error("Select error");
+
+        if (FD_ISSET(sockfd, &read_fds)) {
+            newsockfd = accept(sockfd, (struct sockaddr*)&cli_addr, &clientlen);
+             if (newsockfd < 0) {
+                perror("❌ Accept failed.");
+                continue;
+            }
+            FD_SET(newsockfd, &active_fds);
+            if (newsockfd > max_fd) max_fd = newsockfd;
+
+            for (int j = 0; j < MAX_CLIENTS; j++) {
+                if (clients[j] == -1) {
+                    clients[j] = newsockfd;
+                    break;
+                }
+            }
+            printf("✅ New client connected (FD: %d).\n", newsockfd);
+            write(newsockfd, "Server: Welcome to the chat server!\n", 36);
         }
 
-        printf("Server: ");
-        memset(buff, 0, 255);
-        fgets(buff, 255, stdin);
-        n = write(newsockfd, buff, strlen(buff));
-        
-        if (n < 0) error("Could not write to buffer.");
+        if (FD_ISSET(STDIN_FILENO, &read_fds)){ // reads stdin inputs from server
+            char input[BUFFER_SIZE];
+            if (fgets(input, sizeof(input), stdin) != NULL){
+                if (strncmp(input, "EXIT", 4) == 0) {
+                    printf("🛑 Shutting down the server...\n");
+                    break;
+                }
+                broadcast_clients(input, -1);
+            }
+        }
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            int client_fd = clients[i];
+            if (client_fd != -1 && FD_ISSET(client_fd, &read_fds)) {  // check active clients
+                memset(buffer, 0, BUFFER_SIZE);
+                int bytes_read = read(client_fd, buffer, BUFFER_SIZE);
+                if (bytes_read <= 0) {  
+                    printf("❌ Client %d disconnected.\n", client_fd);
+                    close(client_fd);
+                    FD_CLR(client_fd, &active_fds);
+                    clients[i] = -1;
+                } else {  
+                    printf("Client %d: %s", client_fd, buffer);
+                    broadcast_clients(buffer, client_fd);
+                }
+            }
+        }
     }
-
-    close(newsockfd);
     close(sockfd);
     return 0;
+
 }
