@@ -92,7 +92,7 @@ int main(int argc, char *argv[]){
 
         if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) < 0) error("Select error");
 
-        if (FD_ISSET(sockfd, &read_fds)) {
+        if (FD_ISSET(sockfd, &read_fds))  { // checks for new clients
             newsockfd = accept(sockfd, (struct sockaddr*)&cli_addr, &clientlen);
              if (newsockfd < 0) {
                 perror("❌ Accept failed.");
@@ -108,6 +108,7 @@ int main(int argc, char *argv[]){
                 }
             }
             printf("✅ New client connected (FD: %d).\n", newsockfd);
+            broadcast_clients("✅Joined!\n", newsockfd);
             write(newsockfd, "Server: Welcome to the chat server!\n", 36);
         }
 
@@ -121,9 +122,9 @@ int main(int argc, char *argv[]){
                 broadcast_clients(input, -1);
             }
         }
-        for (int i = 0; i < MAX_CLIENTS; i++) {
+        for (int i = 0; i < MAX_CLIENTS; i++) { // check active clients
             int client_fd = clients[i];
-            if (client_fd != -1 && FD_ISSET(client_fd, &read_fds)) {  // check active clients
+            if (client_fd != -1 && FD_ISSET(client_fd, &read_fds)) {  
                 memset(buffer, 0, BUFFER_SIZE);
                 int bytes_read = read(client_fd, buffer, BUFFER_SIZE);
                 if (bytes_read <= 0) {  
