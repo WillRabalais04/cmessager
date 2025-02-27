@@ -119,6 +119,13 @@ int main(int argc, char *argv[]){
                     printf("🛑 Shutting down the server...\n");
                     break;
                 }
+                int kick_num;
+                if (sscanf(input, "KICK %d", &kick_num) == 1) {
+                    write(kick_num, "Bye bye! 👋", 13);
+                    close(kick_num);
+                    FD_CLR(kick_num, &active_fds);
+                    clients[kick_num] = -1;
+                }
                 broadcast_clients(input, -1);
             }
         }
